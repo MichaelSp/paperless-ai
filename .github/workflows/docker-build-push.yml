@@ -1,3 +1,4 @@
+name: "Docker Build & Push"
 on:
   release:
     types: [published]  # Only triggers when a release is published
