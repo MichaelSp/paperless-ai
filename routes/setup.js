@@ -16,6 +16,8 @@ const bcrypt = require('bcryptjs');
 const cookieParser = require('cookie-parser');
 const { authenticateJWT, isAuthenticated } = require('./auth.js');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const customService = require('../services/customService.js');
+require('dotenv').config({ path: '../data/.env' });
 
 
 // API endpoints that should not redirect
@@ -59,14 +61,18 @@ router.use(async (req, res, next) => {
   // Setup check
   try {
     const isConfigured = await setupService.isConfigured();
-    if (!isConfigured && !req.path.startsWith('/setup')) {
+    console.log('env:', process.env.PAPERLESS_AI_INITIAL_SETUP);
+  
+    if (!isConfigured && (!process.env.PAPERLESS_AI_INITIAL_SETUP || process.env.PAPERLESS_AI_INITIAL_SETUP === 'no') && !req.path.startsWith('/setup')) {
       return res.redirect('/setup');
+    } else if (!isConfigured && process.env.PAPERLESS_AI_INITIAL_SETUP === 'yes' && !req.path.startsWith('/settings')) {
+      return res.redirect('/settings');
     }
   } catch (error) {
     console.error('Error checking setup configuration:', error);
     return res.status(500).send('Internal Server Error');
   }
-
+  
   next();
 });
 
@@ -135,6 +141,8 @@ router.post('/login', async (req, res) => {
       });
 
       return res.redirect('/dashboard');
+    }else{
+      return res.render('login', { error: 'Invalid credentials' });
     }
   } catch (error) {
     console.error('Login error:', error);
@@ -230,7 +238,8 @@ router.get('/chat', async (req, res) => {
   try {
       const {open} = req.query;
       const documents = await paperlessService.getDocuments();
-      res.render('chat', { documents, open });
+      const version = configFile.PAPERLESS_AI_VERSION || ' ';
+      res.render('chat', { documents, open, version });
   } catch (error) {
     console.error('[ERRO] loading documents:', error);
     res.status(500).send('Error loading documents');
@@ -246,9 +255,18 @@ router.get('/chat/init', async (req, res) => {
 
 // Nachricht senden
 router.post('/chat/message', async (req, res) => {
-  const { documentId, message } = req.body;
-  const response = await ChatService.sendMessage(documentId, message);
-  res.json(response);
+  try {
+    const { documentId, message } = req.body;
+    if (!documentId || !message) {
+      return res.status(400).json({ error: 'Document ID and message are required' });
+    }
+    
+    // Use the new streaming method
+    await ChatService.sendMessageStream(documentId, message, res);
+  } catch (error) {
+    console.error('Chat message error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 router.get('/chat/init/:documentId', async (req, res) => {
@@ -267,62 +285,90 @@ router.get('/chat/init/:documentId', async (req, res) => {
 
 router.get('/history', async (req, res) => {
   try {
-    // Get all documents and tags
-    const historyDocuments = await documentModel.getAllHistory();
     const allTags = await paperlessService.getTags();
-
-    // Create a map of tag IDs to tag objects for quick lookup
     const tagMap = new Map(allTags.map(tag => [tag.id, tag]));
 
-    // Format documents with resolved tags
-    const actual = historyDocuments.map(doc => {
-      // Parse tag IDs and map them to full tag objects
+    // Get all correspondents for filter dropdown
+    const historyDocuments = await documentModel.getAllHistory();
+    const allCorrespondents = [...new Set(historyDocuments.map(doc => doc.correspondent))]
+      .filter(Boolean).sort();
+
+    res.render('history', {
+      version: configFile.PAPERLESS_AI_VERSION,
+      filters: {
+        allTags: allTags,
+        allCorrespondents: allCorrespondents
+      }
+    });
+  } catch (error) {
+    console.error('[ERROR] loading history page:', error);
+    res.status(500).send('Error loading history page');
+  }
+});
+
+router.get('/api/history', async (req, res) => {
+  try {
+    const draw = parseInt(req.query.draw);
+    const start = parseInt(req.query.start) || 0;
+    const length = parseInt(req.query.length) || 10;
+    const search = req.query.search?.value || '';
+    const tagFilter = req.query.tag || '';
+    const correspondentFilter = req.query.correspondent || '';
+
+    // Get all documents
+    const allDocs = await documentModel.getAllHistory();
+    const allTags = await paperlessService.getTags();
+    const tagMap = new Map(allTags.map(tag => [tag.id, tag]));
+
+    // Format and filter documents
+    let filteredDocs = allDocs.map(doc => {
       const tagIds = doc.tags === '[]' ? [] : JSON.parse(doc.tags || '[]');
       const resolvedTags = tagIds.map(id => tagMap.get(parseInt(id))).filter(Boolean);
       const baseURL = process.env.PAPERLESS_API_URL.replace(/\/api$/, '');
-      const hotlink = `${baseURL}/documents/${doc.document_id}/`;
+
       return {
         document_id: doc.document_id,
         title: doc.title || 'Modified: Invalid Date',
         created_at: doc.created_at,
-        tags: resolvedTags, // Now contains full tag objects instead of just IDs
+        tags: resolvedTags,
         correspondent: doc.correspondent || 'Not assigned',
-        link: hotlink
+        link: `${baseURL}/documents/${doc.document_id}/`
       };
+    }).filter(doc => {
+      const matchesSearch = !search || 
+        doc.title.toLowerCase().includes(search.toLowerCase()) ||
+        doc.correspondent.toLowerCase().includes(search.toLowerCase()) ||
+        doc.tags.some(tag => tag.name.toLowerCase().includes(search.toLowerCase()));
+
+      const matchesTag = !tagFilter || doc.tags.some(tag => tag.id === parseInt(tagFilter));
+      const matchesCorrespondent = !correspondentFilter || doc.correspondent === correspondentFilter;
+
+      return matchesSearch && matchesTag && matchesCorrespondent;
     });
 
-    // Get unique correspondents
-    const allCorrespondents = [...new Set(actual.map(doc => doc.correspondent))].filter(Boolean).sort();
+    // Sort documents if requested
+    if (req.query.order) {
+      const order = req.query.order[0];
+      const column = req.query.columns[order.column].data;
+      const dir = order.dir === 'asc' ? 1 : -1;
 
-    // Calculate pagination values
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = (page - 1) * limit;
-    const totalDocuments = actual.length;
-    const totalPages = Math.ceil(totalDocuments / limit);
+      filteredDocs.sort((a, b) => {
+        if (column === 'created_at') {
+          return dir * (new Date(a[column]) - new Date(b[column]));
+        }
+        return dir * a[column].localeCompare(b[column]);
+      });
+    }
 
-    // Get paginated subset of documents
-    const paginatedDocuments = actual.slice(offset, offset + limit);
-
-    // Render the page
-    res.render('history', {
-      version: configFile.PAPERLESS_AI_VERSION,
-      actual: paginatedDocuments,
-      filters: {
-        allTags: allTags,
-        allCorrespondents: allCorrespondents
-      },
-      pagination: {
-        current: page,
-        pages: totalPages,
-        limit: limit,
-        total: totalDocuments
-      }
+    res.json({
+      draw: draw,
+      recordsTotal: allDocs.length,
+      recordsFiltered: filteredDocs.length,
+      data: filteredDocs.slice(start, start + length)
     });
-
   } catch (error) {
-    console.error('[ERROR] loading documents:', error);
-    res.status(500).send('Error loading documents');
+    console.error('[ERROR] loading history data:', error);
+    res.status(500).json({ error: 'Error loading history data' });
   }
 });
 
@@ -567,7 +613,11 @@ router.get('/settings', async (req, res) => {
     return [];
   };
 
+  let showErrorCheckSettings = false;
   const isConfigured = await setupService.isConfigured();
+  if(!isConfigured && process.env.PAPERLESS_AI_INITIAL_SETUP === 'yes') {
+    showErrorCheckSettings = true;
+  }
   let config = {
     PAPERLESS_API_URL: (process.env.PAPERLESS_API_URL || 'http://localhost:8000').replace(/\/api$/, ''),
     PAPERLESS_API_TOKEN: process.env.PAPERLESS_API_TOKEN || '',
@@ -587,7 +637,10 @@ router.get('/settings', async (req, res) => {
     PROMPT_TAGS: normalizeArray(process.env.PROMPT_TAGS),
     PAPERLESS_AI_VERSION: configFile.PAPERLESS_AI_VERSION || ' ',
     PROCESS_ONLY_NEW_DOCUMENTS: process.env.PROCESS_ONLY_NEW_DOCUMENTS || ' ',
-    USE_EXISTING_DATA: process.env.USE_EXISTING_DATA || 'no'
+    USE_EXISTING_DATA: process.env.USE_EXISTING_DATA || 'no',
+    CUSTOM_API_KEY: process.env.CUSTOM_API_KEY || '',
+    CUSTOM_BASE_URL: process.env.CUSTOM_BASE_URL || '',
+    CUSTOM_MODEL: process.env.CUSTOM_MODEL || ''
   };
   
   if (isConfigured) {
@@ -609,7 +662,8 @@ router.get('/settings', async (req, res) => {
   res.render('settings', { 
     version,
     config,
-    success: isConfigured ? 'The application is already configured. You can update the configuration below.' : undefined
+    success: isConfigured ? 'The application is already configured. You can update the configuration below.' : undefined,
+    settingsError: showErrorCheckSettings ? 'Please check your settings. Something is not working correctly.' : undefined
   });
 });
 
@@ -668,6 +722,9 @@ router.post('/manual/analyze', express.json(), async (req, res) => {
     } else if (process.env.AI_PROVIDER === 'ollama') {
       const analyzeDocument = await ollamaService.analyzeDocument(content, existingTags, existingCorrespondentList, id || []);
       return res.json(analyzeDocument);
+    } else if (process.env.AI_PROVIDER === 'custom') {
+      const analyzeDocument = await customService.analyzeDocument(content, existingTags, existingCorrespondentList, id || []);
+      return res.json(analyzeDocument);
     } else {
       return res.status(500).json({ error: 'AI provider not configured' });
     }
@@ -697,6 +754,15 @@ router.post('/manual/playground', express.json(), async (req, res) => {
       return res.json(analyzeDocument);
     } else if (process.env.AI_PROVIDER === 'ollama') {
       const analyzeDocument = await ollamaService.analyzePlayground(content, prompt);
+      return res.json(analyzeDocument);
+    } else if (process.env.AI_PROVIDER === 'custom') {
+      const analyzeDocument = await customService.analyzePlayground(content, prompt);
+      await documentModel.addOpenAIMetrics(
+        documentId, 
+        analyzeDocument.metrics.promptTokens,
+        analyzeDocument.metrics.completionTokens,
+        analyzeDocument.metrics.totalTokens
+      )
       return res.json(analyzeDocument);
     } else {
       return res.status(500).json({ error: 'AI provider not configured' });
@@ -808,8 +874,13 @@ router.post('/setup', express.json(), async (req, res) => {
           username,
           password,
           paperlessUsername,
-          useExistingData
+          useExistingData,
+          customApiKey,
+          customBaseUrl,
+          customModel
       } = req.body;
+
+      console.log('Setup request received:', req.body);
 
       const normalizeArray = (value) => {
           if (!value) return [];
@@ -862,7 +933,11 @@ router.post('/setup', express.json(), async (req, res) => {
           PROMPT_TAGS: normalizeArray(promptTags),
           USE_EXISTING_DATA: useExistingData || 'no',
           API_KEY: apiToken,
-          JWT_SECRET: jwtToken
+          JWT_SECRET: jwtToken,
+          CUSTOM_API_KEY: customApiKey || '',
+          CUSTOM_BASE_URL: customBaseUrl || '',
+          CUSTOM_MODEL: customModel || '',
+          PAPERLESS_AI_INITIAL_SETUP: 'yes'
       };
 
       // Validate AI provider config
@@ -884,8 +959,19 @@ router.post('/setup', express.json(), async (req, res) => {
           }
           config.OLLAMA_API_URL = ollamaUrl || 'http://localhost:11434';
           config.OLLAMA_MODEL = ollamaModel || 'llama3.2';
+      }else if (aiProvider === 'custom') {
+        console.log('Custom AI provider selected');
+          const isCustomValid = await setupService.validateCustomConfig(customBaseUrl, customApiKey, customModel);
+          if (!isCustomValid) {
+              return res.status(400).json({
+                  error: 'Custom connection failed. Please check URL, API Key and Model.'
+              });
+          }
+          config.CUSTOM_BASE_URL = customBaseUrl;
+          config.CUSTOM_API_KEY = customApiKey;
+          config.CUSTOM_MODEL = customModel;
       }
-
+      
       // Save configuration
       await setupService.saveConfig(config);
       const hashedPassword = await bcrypt.hash(password, 15);
@@ -929,7 +1015,10 @@ router.post('/settings', express.json(), async (req, res) => {
       usePromptTags,
       promptTags,
       paperlessUsername,
-      useExistingData
+      useExistingData,
+      customApiKey,
+      customBaseUrl,
+      customModel
     } = req.body;
 
     const currentConfig = {
@@ -950,7 +1039,10 @@ router.post('/settings', express.json(), async (req, res) => {
       USE_PROMPT_TAGS: process.env.USE_PROMPT_TAGS || 'no',
       PROMPT_TAGS: process.env.PROMPT_TAGS || '',
       USE_EXISTING_DATA: process.env.USE_EXISTING_DATA || 'no',
-      API_KEY: process.env.API_KEY || ''
+      API_KEY: process.env.API_KEY || '',
+      CUSTOM_API_KEY: process.env.CUSTOM_API_KEY || '',
+      CUSTOM_BASE_URL: process.env.CUSTOM_BASE_URL || '',
+      CUSTOM_MODEL: process.env.CUSTOM_MODEL || ''
     };
 
     const normalizeArray = (value) => {
@@ -1017,6 +1109,9 @@ router.post('/settings', express.json(), async (req, res) => {
     if (usePromptTags) updatedConfig.USE_PROMPT_TAGS = usePromptTags;
     if (promptTags) updatedConfig.PROMPT_TAGS = normalizeArray(promptTags);
     if (useExistingData) updatedConfig.USE_EXISTING_DATA = useExistingData;
+    if (customApiKey) updatedConfig.CUSTOM_API_KEY = customApiKey;
+    if (customBaseUrl) updatedConfig.CUSTOM_BASE_URL = customBaseUrl;
+    if (customModel) updatedConfig.CUSTOM_MODEL = customModel;
 
     let apiToken = '';
     //generate a random secure api token

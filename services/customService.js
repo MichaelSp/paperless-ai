@@ -5,71 +5,61 @@ const paperlessService = require('./paperlessService');
 const fs = require('fs').promises;
 const path = require('path');
 
-class OpenAIService {
+class CustomOpenAIService {
   constructor() {
     this.client = null;
     this.tokenizer = null;
   }
 
   initialize() {
-    if (!this.client && config.aiProvider === 'ollama') {
-      this.client = new OpenAI({
-        baseURL: config.ollama.apiUrl + '/v1',
-        apiKey: 'ollama'
-      });
-    } else if (!this.client && config.aiProvider === 'custom') {
+    if (!this.client && config.aiProvider === 'custom') {
       this.client = new OpenAI({
         baseURL: config.custom.apiUrl,
         apiKey: config.custom.apiKey
       });
-    } else if (!this.client && config.aiProvider === 'openai') {
-    if (!this.client && config.openai.apiKey) {
-      this.client = new OpenAI({
-        apiKey: config.openai.apiKey
-      });
     }
-    }}
-
-  // Calculate tokens for a given text
-  async calculateTokens(text) {
-    if (!this.tokenizer) {
-      // Use the appropriate model encoding
-      this.tokenizer = await tiktoken.encoding_for_model(process.env.OPENAI_MODEL || "gpt-4o-mini");
-    }
-    return this.tokenizer.encode(text).length;
   }
 
-  // Calculate tokens for a given text
-  async calculateTotalPromptTokens(systemPrompt, additionalPrompts = []) {
-    let totalTokens = 0;
-    
-    // Count tokens for system prompt
-    totalTokens += await this.calculateTokens(systemPrompt);
-    
-    // Count tokens for additional prompts
-    for (const prompt of additionalPrompts) {
-      if (prompt) { // Only count if prompt exists
-        totalTokens += await this.calculateTokens(prompt);
+    // Calculate tokens for a given text
+    async calculateTokens(text) {
+      if (!this.tokenizer) {
+        // Use the appropriate model encoding
+        this.tokenizer = await tiktoken.encoding_for_model(process.env.OPENAI_MODEL || "gpt-4o-mini");
       }
+      return this.tokenizer.encode(text).length;
     }
-    
-    // Add tokens for message formatting (approximately 4 tokens per message)
-    const messageCount = 1 + additionalPrompts.filter(p => p).length; // Count system + valid additional prompts
-    totalTokens += messageCount * 4;
-    
-    return totalTokens;
-  }
-
-  // Truncate text to fit within token limit
-  async truncateToTokenLimit(text, maxTokens) {
-    const tokens = await this.calculateTokens(text);
-    if (tokens <= maxTokens) return text;
-
-    // Simple truncation strategy - could be made more sophisticated
-    const ratio = maxTokens / tokens;
-    return text.slice(0, Math.floor(text.length * ratio));
-  }
-
+  
+    // Calculate tokens for a given text
+    async calculateTotalPromptTokens(systemPrompt, additionalPrompts = []) {
+      let totalTokens = 0;
+      
+      // Count tokens for system prompt
+      totalTokens += await this.calculateTokens(systemPrompt);
+      
+      // Count tokens for additional prompts
+      for (const prompt of additionalPrompts) {
+        if (prompt) { // Only count if prompt exists
+          totalTokens += await this.calculateTokens(prompt);
+        }
+      }
+      
+      // Add tokens for message formatting (approximately 4 tokens per message)
+      const messageCount = 1 + additionalPrompts.filter(p => p).length; // Count system + valid additional prompts
+      totalTokens += messageCount * 4;
+      
+      return totalTokens;
+    }
+  
+    // Truncate text to fit within token limit
+    async truncateToTokenLimit(text, maxTokens) {
+      const tokens = await this.calculateTokens(text);
+      if (tokens <= maxTokens) return text;
+  
+      // Simple truncation strategy - could be made more sophisticated
+      const ratio = maxTokens / tokens;
+      return text.slice(0, Math.floor(text.length * ratio));
+    }
+  
   async analyzeDocument(content, existingTags = [], existingCorrespondentList = [], id) {
     const cachePath = path.join('./public/images', `${id}.png`);
     try {
@@ -78,7 +68,7 @@ class OpenAIService {
       const timestamp = now.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
       
       if (!this.client) {
-        throw new Error('OpenAI client not initialized');
+        throw new Error('Custom OpenAI client not initialized');
       }
 
       // Handle thumbnail caching
@@ -102,11 +92,11 @@ class OpenAIService {
       const existingTagsList = existingTags
         .map(tag => tag.name)
         .join(', ');
-      
 
+      
       let systemPrompt = '';
       let promptTags = '';
-      const model = process.env.OPENAI_MODEL;
+      const model = config.custom.model;
       // Get system prompt and model
       if(process.env.USE_EXISTING_DATA === 'yes') {
         systemPrompt = `
@@ -124,23 +114,21 @@ class OpenAIService {
         Take these tags and try to match one or more to the document content.\n\n
         ` + config.specialPromptPreDefinedTags;
       }
-      
+
       // Calculate total prompt tokens including all components
       const totalPromptTokens = await this.calculateTotalPromptTokens(
         systemPrompt,
         process.env.USE_PROMPT_TAGS === 'yes' ? [promptTags] : []
       );
+        
+        // Calculate available tokens
+        const maxTokens = 128000; // Model's maximum context length
+        const reservedTokens = totalPromptTokens + 1000; // Reserve for response
+        const availableTokens = maxTokens - reservedTokens;
+        
+        // Truncate content if necessary
+        const truncatedContent = await this.truncateToTokenLimit(content, availableTokens);
       
-      // Calculate available tokens
-      const maxTokens = 128000; // Model's maximum context length
-      const reservedTokens = totalPromptTokens + 1000; // Reserve for response
-      const availableTokens = maxTokens - reservedTokens;
-      
-      // Truncate content if necessary
-      const truncatedContent = await this.truncateToTokenLimit(content, availableTokens);
-      
-      // write complete Prompt to file for debugging
-      await this.writePromptToFile(systemPrompt, truncatedContent);
       // Make API request
       const response = await this.client.chat.completions.create({
         model: model,
@@ -261,7 +249,7 @@ class OpenAIService {
       
       // Make API request
       const response = await this.client.chat.completions.create({
-        model: process.env.OPENAI_MODEL,
+        model: config.custom.model,
         messages: [
           {
             role: "system",
@@ -290,6 +278,8 @@ class OpenAIService {
         completionTokens: usage.completion_tokens,
         totalTokens: usage.total_tokens
       };
+
+      console.log(mappedUsage);
 
       let jsonContent = response.choices[0].message.content;
       jsonContent = jsonContent.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -323,4 +313,4 @@ class OpenAIService {
   }
 }
 
-module.exports = new OpenAIService();
+module.exports = new CustomOpenAIService();

@@ -4,12 +4,24 @@
 
 # Paperless-AI
 
-An automated document analyzer for Paperless-ngx using OpenAI API and Ollama (Mistral, llama, phi 3, gemma 2) to automatically analyze and tag your documents. \
-It features: Automode, Manual Mode, Ollama and OpenAI, a Chat function to query your documents with AI, a modern and intuitive Webinterface. 
-
+An automated document analyzer for Paperless-ngx using OpenAI API, Ollama and all OpenAI API compatible Services to automatically analyze and tag your documents. \
+It features: Automode, Manual Mode, Ollama and OpenAI, a Chat function to query your documents with AI, a modern and intuitive Webinterface. \
+\
+**Following Services and OpenAI API compatible services have been successfully tested:**
+- Ollama
+- OpenAI
+- DeepSeek.ai
+- OpenRouter.ai
+- Perplexity.ai
+- Together.ai
+- VLLM
+- LiteLLM
+- Fastchat
+- Gemini (Google)
+- ... and there are possibly many more
 
 ### Disclaimer:
-paperless-ai makes changes to the documents in your productive paperlessNGX instance that cannot be easily undone.
+paperless-ai makes changes to the documents (not the content, the meta data) in your productive paperlessNGX instance that cannot be easily undone.
 Do the configuration carefully and think twice. 
 Please test the results beforehand in a separate development environment and be sure to back up your documents and metadata beforehand. 
 
@@ -48,7 +60,7 @@ If you upgrade from 1.x to 2.1.x or later:
 ### Automated Document Management
 - **Automatic Scanning**: Identifies and processes new documents within Paperless-ngx.
 - **AI-Powered Analysis**: Leverages OpenAI API and Ollama (Mistral, Llama, Phi 3, Gemma 2) for precise document analysis.
-- **Metadata Assignment**: Automatically assigns titles, tags, and correspondent details.
+- **Metadata Assignment**: Automatically assigns titles, tags, document_type and correspondent details.
 
 ### Advanced Customization Options
 - **Predefined Processing Rules**: Specify which documents to process based on existing tags. *(Optional)* 🆕
@@ -74,7 +86,7 @@ If you upgrade from 1.x to 2.1.x or later:
 
 - Docker and Docker Compose
 - Access to a Paperless-ngx installation
-- OpenAI API key or your own Ollama instance with your chosen model running and reachable.
+- Cloud based LLM access (see list on top) or your own Ollama or other selfhosted LLM instance with your chosen model running and reachable.
 - Basic understanding of cron syntax (for scan interval configuration)
 
 ## Installation
