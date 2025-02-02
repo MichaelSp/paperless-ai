@@ -28,7 +28,6 @@ class ThemeManager {
     }
 }
 
-// Form Management
 class FormManager {
     constructor() {
         this.form = document.getElementById('setupForm');
@@ -64,25 +63,50 @@ class FormManager {
         const provider = this.aiProvider.value;
         const openaiSettings = document.getElementById('openaiSettings');
         const ollamaSettings = document.getElementById('ollamaSettings');
+        const customSettings = document.getElementById('customSettings');
+        
+        // Get all provider-specific fields
         const openaiKey = document.getElementById('openaiKey');
         const ollamaUrl = document.getElementById('ollamaUrl');
         const ollamaModel = document.getElementById('ollamaModel');
+        const customBaseUrl = document.getElementById('customBaseUrl');
+        const customApiKey = document.getElementById('customApiKey');
+        const customModel = document.getElementById('customModel');
         
-        if (provider === 'openai') {
-            openaiSettings.classList.remove('hidden');
-            ollamaSettings.classList.add('hidden');
-            openaiKey.required = true;
-            ollamaUrl.required = false;
-            ollamaModel.required = false;
-        } else {
-            openaiSettings.classList.add('hidden');
-            ollamaSettings.classList.remove('hidden');
-            openaiKey.required = false;
-            ollamaUrl.required = true;
-            ollamaModel.required = true;
+        // Hide all settings sections first
+        openaiSettings.classList.add('hidden');
+        ollamaSettings.classList.add('hidden');
+        customSettings.classList.add('hidden');
+        
+        // Reset all required fields
+        openaiKey.required = false;
+        ollamaUrl.required = false;
+        ollamaModel.required = false;
+        customBaseUrl.required = false;
+        customApiKey.required = false;
+        customModel.required = false;
+        
+        // Show and set required fields based on selected provider
+        switch (provider) {
+            case 'openai':
+                openaiSettings.classList.remove('hidden');
+                openaiKey.required = true;
+                break;
+            case 'ollama':
+                ollamaSettings.classList.remove('hidden');
+                ollamaUrl.required = true;
+                ollamaModel.required = true;
+                break;
+            case 'custom':
+                customSettings.classList.remove('hidden');
+                customBaseUrl.required = true;
+                customApiKey.required = true;
+                customModel.required = true;
+                break;
         }
     }
 
+    // Rest of the class methods remain the same
     toggleTagsInput() {
         const showTags = this.showTags.value;
         const tagsInputSection = document.getElementById('tagsInputSection');
@@ -325,7 +349,8 @@ Analyze the document content and extract the following information into a struct
 2. correspondent: Identify the sender/institution but do not include addresses
 3. tags: Select up to 4 relevant thematic tags
 4. document_date: Extract the document date (format: YYYY-MM-DD)
-5. language: Determine the document language (e.g. "de" or "en")
+5. document_type: Determine a precise type that classifies the document (e.g. Invoice, Contract, Employer, Information and so on)
+6. language: Determine the document language (e.g. "de" or "en")
       
 Important rules for the analysis:
 

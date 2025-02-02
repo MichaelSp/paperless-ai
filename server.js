@@ -30,8 +30,32 @@ const txtLogger = new Logger({
 const app = express();
 let runningTask = false;
 
-// Middleware setup
-app.use(cors());
+
+const corsOptions = {
+  origin: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type', 
+    'x-api-key',
+    'Access-Control-Allow-Private-Network'
+  ],
+  credentials: false
+};
+
+app.use(cors(corsOptions));
+
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, x-api-key, Access-Control-Allow-Private-Network');
+  res.header('Access-Control-Allow-Private-Network', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -52,6 +76,7 @@ app.use((req, res, next) => {
   };
   next();
 });
+
 
 // Initialize data directory
 async function initializeDataDirectory() {
@@ -92,7 +117,7 @@ async function processDocument(doc, existingTags, existingCorrespondentList, own
 
   const aiService = AIServiceFactory.getService();
   const analysis = await aiService.analyzeDocument(content, existingTags, existingCorrespondentList, doc.id);
-  
+  console.log('Repsonse from AI service:', analysis);
   if (analysis.error) {
     throw new Error(`[ERROR] Document analysis failed: ${analysis.error}`);
   }
@@ -110,6 +135,7 @@ async function buildUpdateData(analysis, doc) {
     tags: tagIds,
     title: analysis.document.title || doc.title,
     created: analysis.document.document_date || doc.created,
+    document_type: analysis.document.document_type || doc.document_type,
   };
 
   if (analysis.document.correspondent) {
@@ -125,6 +151,17 @@ async function buildUpdateData(analysis, doc) {
 
   if (analysis.document.language) {
     updateData.language = analysis.document.language;
+  }
+
+  if (analysis.document.document_type) {
+    try {
+      const documentType = await paperlessService.getOrCreateDocumentType(analysis.document.document_type);
+      if (documentType) {
+        updateData.document_type = documentType.id;
+      }
+    } catch (error) {
+      console.error(`[ERROR] Error processing document type:`, error);
+    }
   }
 
   return updateData;
@@ -270,7 +307,7 @@ async function startScanning() {
 
     const userId = await paperlessService.getOwnUserID();
     if (!userId) {
-      console.error('Failed to get own user ID. Aborting scanning.');
+      console.error('Failed to get own user ID. Abort scanning.');
       return;
     }
 

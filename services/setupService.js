@@ -62,6 +62,30 @@ class SetupService {
     }
   }
 
+  async validateCustomConfig(url, apiKey, model) {
+    const config = {
+      baseURL: url,
+      apiKey: apiKey,
+      model: model
+    };
+    try {
+      const openai = new OpenAI({ 
+        apiKey: config.apiKey, 
+        baseURL: config.baseURL,
+      });
+      const completion = await openai.chat.completions.create({
+        messages: [{ role: "user", content: "Test" }],
+        model: config.model,
+      });
+      return completion.choices && completion.choices.length > 0;
+    } catch (error) {
+      console.error('Custom AI validation error:', error.message);
+      return false;
+    }
+  }
+
+
+
   async validateOllamaConfig(url, model) {
     try {
       const response = await axios.post(`${url}/api/generate`, {
@@ -102,6 +126,15 @@ class SetupService {
       );
       if (!ollamaValid) {
         throw new Error('Invalid Ollama configuration');
+      }
+    } else if (aiProvider === 'custom') {
+      const customValid = await this.validateCustomConfig(
+        config.CUSTOM_BASE_URL,
+        config.CUSTOM_API_KEY,
+        config.CUSTOM_MODEL
+      );
+      if (!customValid) {
+        throw new Error('Invalid Custom AI configuration');
       }
     }
 
